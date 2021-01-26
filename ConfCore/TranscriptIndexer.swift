@@ -8,7 +8,7 @@
 
 import Cocoa
 import RealmSwift
-import SwiftyJSON
+import Transcripts
 import os.log
 
 extension Notification.Name {
@@ -19,80 +19,113 @@ extension Notification.Name {
 public final class TranscriptIndexer {
 
     private let storage: Storage
-    private let log = OSLog(subsystem: "ConfCore", category: "TranscriptIndexer")
+    private static let log = OSLog(subsystem: "ConfCore", category: "TranscriptIndexer")
+    private let log = TranscriptIndexer.log
+    public var manifestURL: URL
+    public var ignoreExistingEtags = false
 
-    public init(_ storage: Storage) {
+    public init(_ storage: Storage, manifestURL: URL) {
         self.storage = storage
+        self.manifestURL = manifestURL
     }
 
-    /// The progress when the transcripts are being downloaded/indexed
-    public var transcriptIndexingProgress: Progress?
-
-    private let asciiWWDCURL = "https://asciiwwdc.com/"
-
-    fileprivate let bgThread = DispatchQueue.global(qos: .utility)
+    fileprivate let queue = DispatchQueue(label: "Transcript Indexer", qos: .background)
 
     fileprivate lazy var backgroundOperationQueue: OperationQueue = {
         let q = OperationQueue()
 
-        q.underlyingQueue = self.bgThread
+        q.underlyingQueue = self.queue
         q.name = "Transcript Indexing"
 
         return q
     }()
 
-    public static let minTranscriptableSessionLimit: Int = 20
+    private lazy var onQueueRealm: Realm = {
+        // swiftlint:disable:next force_try
+        try! storage.makeRealm()
+    }()
 
-    // We specify the latest year known to have transcripts in the predicate to avoid firing lots of requests to ASCIIWWDC which would result in a 404
-    public static let transcriptableSessionsPredicate: NSPredicate = NSPredicate(format: "ANY event.year > 2012 AND ANY event.year <= 2018 AND transcriptIdentifier == '' AND SUBQUERY(assets, $asset, $asset.rawAssetType == %@).@count > 0", SessionAssetType.streamingVideo.rawValue)
+    /// How many days before transcripts will be refreshed based on the remote manifest, ignoring
+    /// sessions which already have local transcripts.
+    private static let minimumIntervalInDaysBetweenManifestBasedUpdates = 5
+
+    /// The last time a transcript fetch was performed based on the remote manifest.
+    public static var lastManifestBasedUpdateDate: Date {
+        get { UserDefaults.standard.object(forKey: #function) as? Date ?? .distantPast }
+        set { UserDefaults.standard.set(newValue, forKey: #function) }
+    }
+
+    private static var shouldFetchRemoteManifest: Bool {
+        guard let days = Calendar.current.dateComponents(Set([.day]), from: lastManifestBasedUpdateDate, to: Date()).day else { return false }
+        return days > minimumIntervalInDaysBetweenManifestBasedUpdates
+    }
+
+    public static let minTranscriptableSessionLimit: Int = 30
+
+    public static let transcriptableSessionsPredicate: NSPredicate = NSPredicate(format: "ANY event.year > 2012 AND ANY event.year <= 2020 AND transcriptIdentifier == '' AND SUBQUERY(assets, $asset, $asset.rawAssetType == %@).@count > 0", SessionAssetType.streamingVideo.rawValue)
 
     public static func needsUpdate(in storage: Storage) -> Bool {
+        // Manifest-based updates.
+        guard !shouldFetchRemoteManifest else {
+            os_log("Transcripts will be checked against remote manifest", log: self.log, type: .debug)
+            return true
+        }
+
+        // Local cache-based updates.
         let transcriptedSessions = storage.realm.objects(Session.self).filter(TranscriptIndexer.transcriptableSessionsPredicate)
 
         return transcriptedSessions.count > minTranscriptableSessionLimit
     }
 
-    /// Try to download transcripts for sessions that don't have transcripts yet
+    private func makeDownloader() -> TranscriptDownloader {
+        TranscriptDownloader(manifestURL: manifestURL, storage: self)
+    }
+
+    private lazy var downloader: TranscriptDownloader = {
+        makeDownloader()
+    }()
+
+    var didStart: () -> Void = { }
+    var progressChanged: (Float) -> Void = { _ in }
+    var didStop: () -> Void = { }
+
     public func downloadTranscriptsIfNeeded() {
-        let transcriptedSessions = storage.realm.objects(Session.self).filter(TranscriptIndexer.transcriptableSessionsPredicate)
+        downloader = makeDownloader()
 
-        let sessionKeys: [String] = transcriptedSessions.map({ $0.identifier })
+        didStart()
 
-        indexTranscriptsForSessionsWithKeys(sessionKeys)
-    }
+        DistributedNotificationCenter.default().postNotificationName(
+            .TranscriptIndexingDidStart,
+            object: nil,
+            userInfo: nil,
+            options: .deliverImmediately
+        )
 
-    func indexTranscriptsForSessionsWithKeys(_ sessionKeys: [String]) {
-        // ignore very low session counts
-        guard sessionKeys.count > TranscriptIndexer.minTranscriptableSessionLimit else {
-            waitAndExit()
-            return
-        }
+        do {
+            let realm = try storage.makeRealm()
 
-        transcriptIndexingProgress = Progress(totalUnitCount: Int64(sessionKeys.count))
+            let knownSessionIds = Array(realm.objects(Session.self).map(\.identifier))
 
-        for key in sessionKeys {
-            guard let session = storage.realm.object(ofType: Session.self, forPrimaryKey: key) else { return }
-            guard let event = session.event.first else { return }
+            os_log("Got %d session IDs", log: self.log, type: .debug, knownSessionIds.count)
 
-            guard session.transcriptIdentifier.isEmpty else { continue }
+            downloader.fetch(validSessionIdentifiers: knownSessionIds, progress: { [weak self] progress in
+                guard let self = self else { return }
 
-            indexTranscript(for: session.number, in: event.year, primaryKey: key)
-        }
-    }
+                os_log("Transcript indexing progresss: %.2f", log: self.log, type: .default, progress)
 
-    fileprivate var batch: [Transcript] = [] {
-        didSet {
-            if batch.count >= 20 {
-                store(batch)
-                storage.storageQueue.waitUntilAllOperationsAreFinished()
-                batch.removeAll()
+                self.progressChanged(progress)
+            }) { [weak self] in
+                self?.finished()
             }
+        } catch {
+            os_log("Failed to initialize Realm: %{public}@", log: self.log, type: .fault, String(describing: error))
         }
     }
 
     fileprivate func store(_ transcripts: [Transcript]) {
         storage.backgroundUpdate { [weak self] backgroundRealm in
-            guard let `self` = self else { return }
+            guard let self = self else { return }
+            os_log("Start transcript realm updates", log: self.log, type: .debug)
 
             transcripts.forEach { transcript in
                 guard let session = backgroundRealm.object(ofType: Session.self, forPrimaryKey: transcript.identifier) else {
@@ -107,87 +140,57 @@ public final class TranscriptIndexer {
                 session.transcriptIdentifier = transcript.identifier
                 session.transcriptText = transcript.fullText
 
-                backgroundRealm.add(transcript, update: true)
+                backgroundRealm.add(transcript, update: .modified)
             }
+
+            os_log("Finished transcript realm updates", log: self.log, type: .debug)
         }
     }
 
-    fileprivate func indexTranscript(for sessionNumber: String, in year: Int, primaryKey: String) {
-        guard let url = URL(string: "\(asciiWWDCURL)\(year)//sessions/\(sessionNumber)") else { return }
+    private func finished() {
+        didStop()
 
-        var request = URLRequest(url: url)
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-
-        let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-            guard let `self` = self else { return }
-
-            defer {
-                self.transcriptIndexingProgress?.completedUnitCount += 1
-
-                self.checkForCompletion()
-            }
-
-            guard let jsonData = data else {
-                os_log("No data returned from ASCIIWWDC for transcript with identifier %{public}@",
-                       log: self.log,
-                       type: .error,
-                       primaryKey)
-
-                return
-            }
-
-            var json: JSON
-
-            do {
-                json = try JSON(data: jsonData)
-            } catch {
-                os_log("Error parsing JSON for transcript with identifier %{public}@: %{public}@",
-                       log: self.log,
-                       type: .error,
-                       primaryKey,
-                       String(describing: error))
-
-                return
-            }
-
-            let result = TranscriptsJSONAdapter().adapt(json)
-
-            guard case .success(let transcript) = result else {
-                os_log("Error unserializing transcript with identifier %{public}@",
-                       log: self.log,
-                       type: .error,
-                       primaryKey)
-
-                return
-            }
-
-            self.storage.storageQueue.waitUntilAllOperationsAreFinished()
-
-            self.batch.append(transcript)
-        }
-
-        task.resume()
+        DistributedNotificationCenter.default().postNotificationName(
+            .TranscriptIndexingDidStop,
+            object: nil,
+            userInfo: nil,
+            options: .deliverImmediately
+        )
     }
 
-    private func checkForCompletion() {
-        guard let progress = transcriptIndexingProgress else { return }
+}
 
-        os_log("Indexed %{public}d/%{public}d", log: log, type: .debug, progress.completedUnitCount, progress.totalUnitCount)
+extension TranscriptIndexer: TranscriptStorage {
 
-        if progress.completedUnitCount >= progress.totalUnitCount {
-            DispatchQueue.main.async {
-                os_log("Transcript indexing finished 🎉", log: self.log, type: .info)
+    public func previousEtag(for identifier: String) -> String? {
+        guard !ignoreExistingEtags else { return nil }
 
-                self.storage.storageQueue.waitUntilAllOperationsAreFinished()
-                self.waitAndExit()
-            }
-        }
+        return onQueueRealm.object(ofType: Transcript.self, forPrimaryKey: identifier)?.etag
     }
 
-    fileprivate func waitAndExit() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-            exit(0)
+    public func store(_ transcripts: [TranscriptContent], manifest: TranscriptManifest) {
+        let transcriptObjects: [Transcript] = transcripts.map { model in
+            let obj = Transcript()
+
+            obj.identifier = model.identifier
+            obj.fullText = model.lines.map(\.text).joined()
+            obj.etag = manifest.individual[model.identifier]?.etag
+
+            let annotations: [TranscriptAnnotation] = model.lines.map { model in
+                let obj = TranscriptAnnotation()
+
+                obj.timecode = Double(model.time)
+                obj.body = model.text.replacingOccurrences(of: "\n", with: "")
+
+                return obj
+            }
+
+            obj.annotations.append(objectsIn: annotations)
+
+            return obj
         }
+
+        store(transcriptObjects)
     }
 
 }

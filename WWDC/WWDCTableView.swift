@@ -10,10 +10,6 @@ import Cocoa
 
 class WWDCTableView: NSTableView {
 
-    override var effectiveAppearance: NSAppearance {
-        return NSAppearance(named: .vibrantDark)!
-    }
-
     override func menu(for event: NSEvent) -> NSMenu? {
 
         let windowLocation = event.locationInWindow

@@ -29,6 +29,10 @@ class SessionSummaryViewController: NSViewController {
         fatalError("init(coder:) has not been implemented")
     }
 
+    enum Metrics {
+        static let summaryHeight: CGFloat = 100
+    }
+
     private lazy var titleLabel: WWDCTextField = {
         let l = WWDCTextField(labelWithString: "")
         l.cell?.backgroundStyle = .dark
@@ -37,6 +41,8 @@ class SessionSummaryViewController: NSViewController {
         l.allowsDefaultTighteningForTruncation = true
         l.maximumNumberOfLines = 2
         l.translatesAutoresizingMaskIntoConstraints = false
+        l.isSelectable = true
+        l.allowsEditingTextAttributes = true
 
         return l
     }()
@@ -58,18 +64,40 @@ class SessionSummaryViewController: NSViewController {
         return c
     }()
 
-    private lazy var summaryLabel: WWDCTextField = {
-        let l = WWDCTextField(labelWithString: "")
-        l.font = .systemFont(ofSize: 18)
-        l.textColor = .secondaryText
-        l.cell?.backgroundStyle = .dark
-        l.isSelectable = true
-        l.lineBreakMode = .byWordWrapping
-        l.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        l.allowsDefaultTighteningForTruncation = true
-        l.maximumNumberOfLines = 20
+    private func attributedSummaryString(from string: String) -> NSAttributedString {
+        .create(with: string, font: .systemFont(ofSize: 15), color: .secondaryText, lineHeightMultiple: 1.2)
+    }
+    
+    private lazy var summaryTextView: NSTextView = {
+        let v = NSTextView()
 
-        return l
+        v.drawsBackground = false
+        v.backgroundColor = .clear
+        v.autoresizingMask = [.width]
+        v.textContainer?.widthTracksTextView = true
+        v.textContainer?.heightTracksTextView = false
+        v.isEditable = false
+        v.isVerticallyResizable = true
+        v.isHorizontallyResizable = false
+        v.textContainer?.containerSize = NSSize(width: 100, height: CGFloat.greatestFiniteMagnitude)
+
+        return v
+    }()
+
+    private lazy var summaryScrollView: NSScrollView = {
+        let v = NSScrollView()
+
+        v.contentView = FlippedClipView()
+        v.drawsBackground = false
+        v.backgroundColor = .clear
+        v.borderType = .noBorder
+        v.documentView = self.summaryTextView
+        v.autohidesScrollers = true
+        v.hasVerticalScroller = true
+        v.hasHorizontalScroller = false
+        v.verticalScrollElasticity = .none
+
+        return v
     }()
 
     private lazy var contextLabel: NSTextField = {
@@ -107,7 +135,7 @@ class SessionSummaryViewController: NSViewController {
     }()
 
     private lazy var stackView: NSStackView = {
-        let v = NSStackView(views: [self.summaryLabel, self.contextStackView])
+        let v = NSStackView(views: [self.summaryScrollView, self.contextStackView])
 
         v.orientation = .vertical
         v.alignment = .leading
@@ -140,8 +168,9 @@ class SessionSummaryViewController: NSViewController {
         stackView.leadingAnchor.constraint(equalTo: view.leadingAnchor).isActive = true
         stackView.trailingAnchor.constraint(equalTo: view.trailingAnchor).isActive = true
         stackView.bottomAnchor.constraint(equalTo: view.bottomAnchor).isActive = true
+        summaryScrollView.heightAnchor.constraint(equalToConstant: Metrics.summaryHeight).isActive = true
 
-        addChildViewController(relatedSessionsViewController)
+        addChild(relatedSessionsViewController)
         relatedSessionsViewController.view.translatesAutoresizingMaskIntoConstraints = false
         stackView.addArrangedSubview(relatedSessionsViewController.view)
         relatedSessionsViewController.view.heightAnchor.constraint(equalToConstant: RelatedSessionsViewController.Metrics.height).isActive = true
@@ -158,6 +187,7 @@ class SessionSummaryViewController: NSViewController {
     private func updateBindings() {
         actionsViewController.view.isHidden = (viewModel == nil)
         actionsViewController.viewModel = viewModel
+        self.summaryScrollView.scroll(.zero)
 
         guard let viewModel = viewModel else { return }
 
@@ -166,8 +196,14 @@ class SessionSummaryViewController: NSViewController {
         viewModel.rxTitle.map(NSAttributedString.attributedBoldTitle(with:)).subscribe(onNext: { [weak self] title in
             self?.titleLabel.attributedStringValue = title
         }).disposed(by: disposeBag)
-        viewModel.rxSummary.bind(to: summaryLabel.rx.text).disposed(by: disposeBag)
         viewModel.rxFooter.bind(to: contextLabel.rx.text).disposed(by: disposeBag)
+
+        viewModel.rxSummary.subscribe(onNext: { [weak self] summary in
+            guard let self = self else { return }
+            guard let textStorage = self.summaryTextView.textStorage else { return }
+            let range = NSRange(location: 0, length: textStorage.length)
+            textStorage.replaceCharacters(in: range, with: self.attributedSummaryString(from: summary))
+        }).disposed(by: disposeBag)
 
         viewModel.rxRelatedSessions.subscribe(onNext: { [weak self] relatedResources in
             let relatedSessions = relatedResources.compactMap({ $0.session })

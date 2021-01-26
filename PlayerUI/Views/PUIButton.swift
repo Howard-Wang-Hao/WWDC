@@ -14,19 +14,19 @@ public final class PUIButton: NSControl {
 
     public var activeTintColor: NSColor = .playerHighlight {
         didSet {
-            setNeedsDisplay()
+            setNeedsDisplay(bounds)
         }
     }
 
     public var tintColor: NSColor = .buttonColor {
         didSet {
-            setNeedsDisplay()
+            setNeedsDisplay(bounds)
         }
     }
 
     public var state: NSControl.StateValue = .off {
         didSet {
-            setNeedsDisplay()
+            setNeedsDisplay(bounds)
         }
     }
 
@@ -64,13 +64,13 @@ public final class PUIButton: NSControl {
 
     private var maskImage: CGImage? {
         didSet {
-            setNeedsDisplay()
+            setNeedsDisplay(bounds)
         }
     }
 
     private var alternateMaskImage: CGImage? {
         didSet {
-            setNeedsDisplay()
+            setNeedsDisplay(bounds)
         }
     }
 
@@ -121,19 +121,19 @@ public final class PUIButton: NSControl {
 
     private var shouldDrawHighlighted: Bool = false {
         didSet {
-            setNeedsDisplay()
+            setNeedsDisplay(bounds)
         }
     }
 
     public var shouldAlwaysDrawHighlighted: Bool = false {
         didSet {
-            setNeedsDisplay()
+            setNeedsDisplay(bounds)
         }
     }
 
     public override var isEnabled: Bool {
         didSet {
-            setNeedsDisplay()
+            setNeedsDisplay(bounds)
         }
     }
 
@@ -148,7 +148,7 @@ public final class PUIButton: NSControl {
         shouldDrawHighlighted = true
 
         if !sendsActionOnMouseDown {
-            window?.trackEvents(matching: [.leftMouseUp, .leftMouseDragged], timeout: NSEvent.foreverDuration, mode: .eventTrackingRunLoopMode) { event, stop in
+            window?.trackEvents(matching: [.leftMouseUp, .leftMouseDragged], timeout: NSEvent.foreverDuration, mode: .eventTracking) { event, stop in
                 if event?.type == .leftMouseUp {
                     self.shouldDrawHighlighted = false
                     stop.pointee = true
@@ -175,10 +175,6 @@ public final class PUIButton: NSControl {
         guard let menu = menu else { return }
 
         menu.popUp(positioning: nil, at: .zero, in: self)
-    }
-
-    public override var effectiveAppearance: NSAppearance {
-        return NSAppearance(named: .vibrantDark)!
     }
 
     public override var allowsVibrancy: Bool {

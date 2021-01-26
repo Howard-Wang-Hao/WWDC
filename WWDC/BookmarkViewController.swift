@@ -82,6 +82,7 @@ final class BookmarkViewController: NSViewController {
         v.backgroundColor = .clear
         v.borderType = .noBorder
         v.documentView = self.textView
+        v.autohidesScrollers = true
 
         return v
     }()
@@ -101,7 +102,6 @@ final class BookmarkViewController: NSViewController {
     override func loadView() {
         view = NSView()
         view.wantsLayer = true
-        view.appearance = WWDCAppearance.appearance()
 
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
@@ -121,7 +121,7 @@ final class BookmarkViewController: NSViewController {
         imageView.image = NSImage(data: bookmark.snapshot)
         textView.string = bookmark.body
 
-        textView.rxText.throttle(1, scheduler: MainScheduler.instance).subscribe(onNext: { [weak self] text in
+        textView.rxText.throttle(.seconds(1), scheduler: MainScheduler.instance).subscribe(onNext: { [weak self] text in
             guard let bookmark = self?.bookmark else { return }
 
             self?.storage.modify(bookmark) { $0.body = text }

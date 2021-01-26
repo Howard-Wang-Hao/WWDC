@@ -7,14 +7,14 @@
 //
 
 import Foundation
-import ThrowBack
-import SwiftyJSON
+import ConfCore
 
 extension Notification.Name {
     static let LocalVideoStoragePathPreferenceDidChange = Notification.Name("LocalVideoStoragePathPreferenceDidChange")
     static let RefreshPeriodicallyPreferenceDidChange = Notification.Name("RefreshPeriodicallyPreferenceDidChange")
     static let SkipBackAndForwardBy30SecondsPreferenceDidChange = Notification.Name("SkipBackAndForwardBy30SecondsPreferenceDidChange")
     static let SyncUserDataPreferencesDidChange = Notification.Name("SyncUserDataPreferencesDidChange")
+    static let PreferredTranscriptLanguageDidChange = Notification.Name("PreferredTranscriptLanguageDidChange")
 }
 
 final class Preferences {
@@ -23,19 +23,31 @@ final class Preferences {
 
     private let defaults = UserDefaults.standard
 
+    private static let defaultLocalVideoStoragePath = NSString.path(withComponents: [NSHomeDirectory(), "Library", "Application Support", "WWDC"])
+
+    init() {
+        defaults.register(defaults: [
+            "localVideoStoragePath": Self.defaultLocalVideoStoragePath,
+            "includeAppBannerInSharedClips": true
+        ])
+    }
+
     /// The URL for the folder where downloaded videos will be saved
     var localVideoStorageURL: URL {
-        get {
-            return URL(fileURLWithPath: TBPreferences.shared.localVideoStoragePath)
-        }
+        set { localVideoStoragePath = newValue.path }
+        get { URL(fileURLWithPath: localVideoStoragePath) }
+    }
+
+    private var localVideoStoragePath: String {
         set {
-            TBPreferences.shared.localVideoStoragePath = newValue.path
-
-            defaults.set(newValue.path, forKey: #function)
-
-            defaults.synchronize()
-
-            NotificationCenter.default.post(name: .LocalVideoStoragePathPreferenceDidChange, object: nil)
+            defaults.set(newValue, forKey: #function)
+        }
+        get {
+            if let path = defaults.object(forKey: #function) as? String {
+                return path
+            } else {
+                return Self.defaultLocalVideoStoragePath
+            }
         }
     }
 
@@ -68,24 +80,9 @@ final class Preferences {
         }
     }
 
-    var filtersState: JSON? {
+    var filtersState: String? {
         get {
-            if let string = defaults.object(forKey: #function) as? String {
-                return JSON(parseJSON: string)
-            } else {
-                return nil
-            }
-        }
-        set {
-            if let myString = newValue?.rawString() {
-                defaults.set(myString, forKey: #function)
-            }
-        }
-    }
-
-    var showedAccountPromptAtStartup: Bool {
-        get {
-            return defaults.bool(forKey: #function)
+            defaults.object(forKey: #function) as? String
         }
         set {
             defaults.set(newValue, forKey: #function)
@@ -130,6 +127,16 @@ final class Preferences {
         }
     }
 
+    var skipIntro: Bool {
+        get { defaults.bool(forKey: #function) }
+        set { defaults.set(newValue, forKey: #function) }
+    }
+
+    var includeAppBannerInSharedClips: Bool {
+        get { defaults.bool(forKey: #function) }
+        set { defaults.set(newValue, forKey: #function) }
+    }
+
     var skipBackAndForwardBy30Seconds: Bool {
         get {
             return defaults.bool(forKey: #function)
@@ -149,6 +156,21 @@ final class Preferences {
             defaults.set(newValue, forKey: #function)
 
             NotificationCenter.default.post(name: .SyncUserDataPreferencesDidChange, object: nil)
+        }
+    }
+
+    public static let fallbackTranscriptLanguageCode = "en"
+
+    var transcriptLanguageCode: String {
+        get { defaults.string(forKey: #function) ?? ConfigResponse.fallbackFeedLanguage }
+        set {
+            let notify = newValue != transcriptLanguageCode
+
+            defaults.set(newValue, forKey: #function)
+
+            guard notify else { return }
+
+            NotificationCenter.default.post(name: .PreferredTranscriptLanguageDidChange, object: newValue)
         }
     }
 

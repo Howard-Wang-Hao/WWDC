@@ -18,16 +18,13 @@
 
 + (void)load
 {
+    NSMutableDictionary *argValues = [[NSUserDefaults standardUserDefaults] volatileDomainForName:NSArgumentDomain].mutableCopy;
+    argValues[@"_NS_4445425547"] = @(YES);
+
+    [[NSUserDefaults standardUserDefaults] setVolatileDomain:argValues forName:NSArgumentDomain];
+
     [[NSNotificationCenter defaultCenter] addObserverForName:NSApplicationDidFinishLaunchingNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
         [UIDebuggerMenuItem insertInMainMenu];
-        
-        if ([[NSBundle bundleWithPath:@"/Library/Frameworks/FScript.framework"] load]) {
-            NSLog(@"[UIDebugger] Successfully added FScript menu");
-            
-            [NSApp sendAction:NSSelectorFromString(@"insertInMainMenu") to:NSClassFromString(@"FScriptMenuItem") from:nil];
-        } else {
-            NSLog(@"[UIDebugger] FScript.framework could not be loaded");
-        }
     }];
 }
 

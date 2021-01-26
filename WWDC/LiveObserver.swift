@@ -97,12 +97,17 @@ final class LiveObserver: NSObject {
             return
         }
 
+        guard let endTime = Calendar.current.date(byAdding: DateComponents(minute: Constants.liveSessionEndTimeTolerance), to: dateProvider()) else {
+            os_log("Could not compute an end time to check for live sessions!", log: log, type: .fault)
+            return
+        }
+
         let previouslyLiveInstances = allLiveInstances.toArray()
         var notLiveAnymore: [SessionInstance] = []
 
-        os_log("Looking for live instances with startTime <= %{public}@", log: log, type: .debug, String(describing: startTime))
+        os_log("Looking for live instances with startTime <= %{public}@ and endTime >= %{public}@", log: log, type: .debug, String(describing: startTime), String(describing: endTime))
 
-        let liveInstances = storage.realm.objects(SessionInstance.self).filter("startTime <= %@ AND SUBQUERY(session.assets, $asset, $asset.rawAssetType == %@ AND $asset.actualEndDate == nil).@count > 0", startTime, SessionAssetType.liveStreamVideo.rawValue)
+        let liveInstances = storage.realm.objects(SessionInstance.self).filter("startTime <= %@ AND endTime >= %@ AND SUBQUERY(session.assets, $asset, $asset.rawAssetType == %@ AND $asset.actualEndDate == nil).@count > 0", startTime, endTime, SessionAssetType.liveStreamVideo.rawValue)
 
         previouslyLiveInstances.forEach { instance in
             if !liveInstances.contains(instance) {
@@ -232,7 +237,7 @@ private final class CloudKitLiveObserver {
 
     private func doCreateSubscription() {
         #if ICLOUD
-            let options: CKQuerySubscriptionOptions = [.firesOnRecordCreation, .firesOnRecordUpdate, .firesOnRecordDeletion]
+            let options: CKQuerySubscription.Options = [.firesOnRecordCreation, .firesOnRecordUpdate, .firesOnRecordDeletion]
             let subscription = CKQuerySubscription(recordType: SessionAsset.recordType,
                                                    predicate: NSPredicate(value: true),
                                                    subscriptionID: specialLiveEventsSubscriptionID,
@@ -258,7 +263,7 @@ private final class CloudKitLiveObserver {
             let notification = CKNotification(fromRemoteNotificationDictionary: userInfo)
 
             // check if the remote notification is for us, if not, tell the caller that we haven't handled it
-            guard notification.subscriptionID == specialLiveEventsSubscriptionID else { return false }
+            guard notification?.subscriptionID == specialLiveEventsSubscriptionID else { return false }
 
             // notification for special live events, just fetch everything again
             fetch()

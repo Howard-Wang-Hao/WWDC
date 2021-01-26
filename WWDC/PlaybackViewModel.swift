@@ -10,6 +10,7 @@ import Foundation
 import ConfCore
 import AVFoundation
 import PlayerUI
+import RxCocoa
 import RxSwift
 
 enum PlaybackError: Error {
@@ -29,34 +30,6 @@ enum PlaybackError: Error {
     }
 }
 
-extension Session {
-
-    func asset(of type: SessionAssetType) -> SessionAsset? {
-        if type == .image {
-            return imageAsset()
-        } else {
-            let filtered = assets.filter("rawAssetType == %@", type.rawValue)
-            return filtered.first
-        }
-    }
-
-    func imageAsset() -> SessionAsset? {
-        guard let path = event.first?.imagesPath else { return nil }
-        guard let baseURL = URL(string: path) else { return nil }
-
-        let filename = "\(staticContentId)_wide_900x506_1x.jpg"
-
-        let url = baseURL.appendingPathComponent("\(staticContentId)/\(filename)")
-
-        let asset = SessionAsset()
-
-        asset.assetType = .image
-        asset.remoteURL = url.absoluteString
-
-        return asset
-    }
-}
-
 final class PlaybackViewModel {
 
     let sessionViewModel: SessionViewModel
@@ -68,11 +41,14 @@ final class PlaybackViewModel {
     var imageURL: URL?
     var image: NSImage?
 
+    private let storage: Storage
+
     private var timeObserver: Any?
 
-    var nowPlayingInfo: Variable<PUINowPlayingInfo?> = Variable(nil)
+    var nowPlayingInfo: BehaviorRelay<PUINowPlayingInfo?> = BehaviorRelay(value: nil)
 
     init(sessionViewModel: SessionViewModel, storage: Storage) throws {
+        self.storage = storage
         title = sessionViewModel.title
         imageURL = sessionViewModel.imageUrl
 
@@ -87,7 +63,7 @@ final class PlaybackViewModel {
 
         // first, check if the session is being live streamed now
         if session.instances.filter("isCurrentlyLive == true").count > 0 {
-            if let liveAsset = session.assets.filter("rawAssetType == %@", SessionAssetType.liveStreamVideo.rawValue).first, let liveURL = URL(string: liveAsset.remoteURL) {
+            if let liveURL = session.asset(ofType: .liveStreamVideo).map({ URL(string: $0.remoteURL) }) {
                 streamUrl = liveURL
                 remoteMediaURL = liveURL
                 isLiveStream = true
@@ -101,7 +77,7 @@ final class PlaybackViewModel {
         // not live
         if !isLiveStream {
             // must have at least streaming video asset
-            guard let asset = session.asset(of: .streamingVideo) else {
+            guard let asset = session.asset(ofType: .streamingVideo) else {
                 throw PlaybackError.assetNotFound(session.identifier)
             }
 
@@ -113,7 +89,7 @@ final class PlaybackViewModel {
             remoteMediaURL = remoteUrl
 
             // check if we have a downloaded file and use it instead
-            if let localUrl = DownloadManager.shared.localFileURL(for: session) {
+            if let localUrl = DownloadManager.shared.downloadedFileURL(for: session) {
                 streamUrl = localUrl
             } else {
                 streamUrl = remoteUrl
@@ -131,28 +107,50 @@ final class PlaybackViewModel {
         #endif
 
         player = AVPlayer(url: finalUrl)
-        nowPlayingInfo.value = PUINowPlayingInfo(playbackViewModel: self)
+        nowPlayingInfo.accept(PUINowPlayingInfo(playbackViewModel: self))
 
-        if !isLiveStream {
-            if session.isWatched {
-                player.seek(to: CMTimeMakeWithSeconds(0, 9000))
+        initializePlayerTimeSyncIfNeeded(with: session)
+    }
+
+    private let progressQueue = DispatchQueue(label: "Progress", qos: .background)
+
+    private func initializePlayerTimeSyncIfNeeded(with session: Session) {
+        guard !isLiveStream else { return }
+
+        if session.isWatched || session.currentPosition().isZero {
+            if Preferences.shared.skipIntro {
+                player.seek(to: CMTimeMakeWithSeconds(Float64(session.firstAnnotationTime), preferredTimescale: 1), toleranceBefore: .zero, toleranceAfter: .zero)
             } else {
-                player.seek(to: CMTimeMakeWithSeconds(Float64(session.currentPosition()), 9000))
+                player.seek(to: CMTimeMakeWithSeconds(0, preferredTimescale: 9000))
             }
+        } else {
+            player.seek(to: CMTimeMakeWithSeconds(Float64(session.currentPosition()), preferredTimescale: 9000))
+        }
 
-            timeObserver = player.addPeriodicTimeObserver(forInterval: CMTimeMakeWithSeconds(5, 9000), queue: DispatchQueue.main) { [weak self] currentTime in
-                guard let `self` = self else { return }
+        timeObserver = player.addPeriodicTimeObserver(forInterval: CMTimeMakeWithSeconds(15, preferredTimescale: 9000), queue: progressQueue) { [weak self] currentTime in
+            guard let self = self else { return }
 
-                guard let duration = self.player.currentItem?.asset.durationIfLoaded else { return }
+            guard let duration = self.player.currentItem?.asset.durationIfLoaded else { return }
 
-                guard CMTIME_IS_VALID(duration) else { return }
+            guard CMTIME_IS_VALID(duration) else { return }
 
-                let p = Double(CMTimeGetSeconds(currentTime))
-                let d = Double(CMTimeGetSeconds(duration))
+            let p = Double(CMTimeGetSeconds(currentTime))
+            let d = Double(CMTimeGetSeconds(duration))
 
-                self.sessionViewModel.session.setCurrentPosition(p, d)
+            Session.setCurrentPosition(
+                for: self.sessionViewModel.sessionIdentifier,
+                in: self.storage,
+                position: p,
+                duration: d
+            )
 
-                if !d.isZero { self.nowPlayingInfo.value?.progress = p / d }
+            if !d.isZero {
+                DispatchQueue.main.async {
+                    if var nowPlayingInfo = self.nowPlayingInfo.value {
+                        nowPlayingInfo.progress = p / d
+                        self.nowPlayingInfo.accept(nowPlayingInfo)
+                    }
+                }
             }
         }
     }
@@ -181,4 +179,10 @@ extension PUINowPlayingInfo {
         )
     }
 
+}
+
+extension Session {
+    var firstAnnotationTime: Double {
+        transcript()?.annotations.first?.timecode ?? 0
+    }
 }

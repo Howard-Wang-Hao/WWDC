@@ -11,7 +11,7 @@ import AVFoundation
 
 open class PUIPlayerWindow: NSWindow {
 
-    @IBInspectable @objc open var hidesTitlebar: Bool = true
+    @IBInspectable open var hidesTitlebar: Bool = true
 
     // MARK: - Initialization
 
@@ -152,13 +152,13 @@ open class PUIPlayerWindow: NSWindow {
     public private(set) var titlebarCompanionViews = [NSView]()
 
     public func addTitlebarCompanion(view: NSView) {
-        guard titlebarCompanionViews.index(of: view) == nil else { return }
+        guard titlebarCompanionViews.firstIndex(of: view) == nil else { return }
 
         titlebarCompanionViews.append(view)
     }
 
     public func removeTitlebarCompanion(view: NSView) {
-        guard let index = titlebarCompanionViews.index(of: view) else { return }
+        guard let index = titlebarCompanionViews.firstIndex(of: view) else { return }
 
         titlebarCompanionViews.remove(at: index)
     }

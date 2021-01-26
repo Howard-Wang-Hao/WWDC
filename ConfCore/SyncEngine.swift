@@ -9,47 +9,55 @@
 import Foundation
 import RxCocoa
 import RxSwift
+import os.log
 
 extension Notification.Name {
     public static let SyncEngineDidSyncSessionsAndSchedule = Notification.Name("SyncEngineDidSyncSessionsAndSchedule")
     public static let SyncEngineDidSyncFeaturedSections = Notification.Name("SyncEngineDidSyncFeaturedSections")
+    public static let SyncEngineDidSyncCocoaHubEditionArticles = Notification.Name("SyncEngineDidSyncCocoaHubEditionArticles")
 }
 
 public final class SyncEngine {
 
+    private let log = OSLog(subsystem: "ConfCore", category: String(describing: SyncEngine.self))
+
     public let storage: Storage
     public let client: AppleAPIClient
+    public let cocoaHubClient: CocoaHubAPIClient
 
     #if ICLOUD
     public let userDataSyncEngine: UserDataSyncEngine
     #endif
 
-    private var didRunIndexingService = false
-
-    private lazy var transcriptIndexingConnection: NSXPCConnection = {
-        let c = NSXPCConnection(serviceName: "io.wwdc.app.TranscriptIndexingService")
-
-        c.remoteObjectInterface = NSXPCInterface(with: TranscriptIndexingServiceProtocol.self)
-
-        return c
-    }()
-
-    private var transcriptIndexingService: TranscriptIndexingServiceProtocol? {
-        return transcriptIndexingConnection.remoteObjectProxy as? TranscriptIndexingServiceProtocol
-    }
-
     private let disposeBag = DisposeBag()
 
-    public init(storage: Storage, client: AppleAPIClient) {
+    let transcriptIndexingClient: TranscriptIndexingClient
+
+    public var transcriptLanguage: String {
+        get { transcriptIndexingClient.transcriptLanguage }
+        set { transcriptIndexingClient.transcriptLanguage = newValue }
+    }
+
+    public var isIndexingTranscripts: BehaviorRelay<Bool> { transcriptIndexingClient.isIndexing }
+    public var transcriptIndexingProgress: BehaviorRelay<Float> { transcriptIndexingClient.indexingProgress }
+
+    public init(storage: Storage, client: AppleAPIClient, cocoaHubClient: CocoaHubAPIClient, transcriptLanguage: String) {
         self.storage = storage
         self.client = client
+        self.cocoaHubClient = cocoaHubClient
+
+        self.transcriptIndexingClient = TranscriptIndexingClient(
+            language: transcriptLanguage,
+            storage: storage
+        )
 
         #if ICLOUD
         self.userDataSyncEngine = UserDataSyncEngine(storage: storage)
         #endif
 
         NotificationCenter.default.rx.notification(.SyncEngineDidSyncSessionsAndSchedule).observeOn(MainScheduler.instance).subscribe(onNext: { [unowned self] _ in
-            self.startTranscriptIndexingIfNeeded()
+            self.transcriptIndexingClient.startIndexing(ignoringCache: false)
+
             #if ICLOUD
             self.userDataSyncEngine.start()
             #endif
@@ -62,11 +70,9 @@ public final class SyncEngine {
                 self.storage.store(contentResult: scheduleResult) { error in
                     NotificationCenter.default.post(name: .SyncEngineDidSyncSessionsAndSchedule, object: error)
 
-                    #if FEATURED_TAB_ENABLED
                     guard error == nil else { return }
 
                     self.syncFeaturedSections()
-                    #endif
                 }
             }
         }
@@ -91,19 +97,35 @@ public final class SyncEngine {
         }
     }
 
-    private func startTranscriptIndexingIfNeeded() {
-        guard !ProcessInfo.processInfo.arguments.contains("--disable-transcripts") else { return }
+    public func syncConfiguration() {
+        client.fetchConfig { [weak self] result in
+            DispatchQueue.main.async {
+                self?.storage.store(configResult: result, completion: { _ in })
+            }
+        }
+    }
 
-        guard TranscriptIndexer.needsUpdate(in: storage) else { return }
+    public func syncCommunityContent() {
+        cocoaHubClient.fetchNews { [weak self] result in
+            DispatchQueue.main.async {
+                self?.storage.store(cocoaHubNewsResult: result, completion: { _ in })
+            }
+        }
+    }
 
-        guard let url = storage.realmConfig.fileURL else { return }
+    public func syncCocoaHubEditionArticles(for id: String) {
+        guard let edition = storage.realm.object(ofType: CocoaHubEdition.self, forPrimaryKey: id) else {
+            os_log("Couldn't find CocoaHub edition with identifier %@", log: self.log, type: .error, id)
+            return
+        }
 
-        guard !didRunIndexingService else { return }
-        didRunIndexingService = true
-
-        transcriptIndexingConnection.resume()
-
-        transcriptIndexingService?.indexTranscriptsIfNeeded(storageURL: url, schemaVersion: storage.realmConfig.schemaVersion)
+        cocoaHubClient.fetchEditionArticles(for: edition.index) { [weak self] result in
+            DispatchQueue.main.async {
+                self?.storage.store(cocoaHubEditionArticles: result, completion: { error in
+                    NotificationCenter.default.post(name: .SyncEngineDidSyncFeaturedSections, object: error)
+                })
+            }
+        }
     }
 
 }

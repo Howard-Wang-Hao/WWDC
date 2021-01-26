@@ -21,6 +21,7 @@ protocol SessionActionsViewControllerDelegate: class {
     func sessionActionsDidSelectDeleteDownload(_ sender: NSView?)
     func sessionActionsDidSelectCancelDownload(_ sender: NSView?)
     func sessionActionsDidSelectShare(_ sender: NSView?)
+    func sessionActionsDidSelectShareClip(_ sender: NSView?)
 }
 
 class SessionActionsViewController: NSViewController {
@@ -92,14 +93,10 @@ class SessionActionsViewController: NSViewController {
         return b
     }()
 
-    private lazy var downloadIndicator: NSProgressIndicator = {
-        let pi = NSProgressIndicator(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
+    private lazy var downloadIndicator: WWDCProgressIndicator = {
+        let pi = WWDCProgressIndicator(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
 
-        pi.style = .spinning
         pi.isIndeterminate = false
-        pi.minValue = 0
-        pi.maxValue = 1
-        pi.doubleValue = 0
         pi.translatesAutoresizingMaskIntoConstraints = false
         pi.widthAnchor.constraint(equalToConstant: 24).isActive = true
         pi.heightAnchor.constraint(equalToConstant: 24).isActive = true
@@ -108,6 +105,19 @@ class SessionActionsViewController: NSViewController {
         pi.toolTip = "Click to cancel"
 
         return pi
+    }()
+
+    private lazy var clipButton: PUIButton = {
+        let b = PUIButton(frame: .zero)
+
+        b.image = #imageLiteral(resourceName: "clip")
+        b.target = self
+        b.action = #selector(shareClip)
+        b.shouldAlwaysDrawHighlighted = true
+        b.sendsActionOnMouseDown = true
+        b.toolTip = "Share a Clip"
+
+        return b
     }()
 
     private lazy var shareButton: PUIButton = {
@@ -130,6 +140,7 @@ class SessionActionsViewController: NSViewController {
             self.downloadButton,
             self.downloadIndicator,
             self.shareButton,
+            self.clipButton,
             self.calendarButton
             ])
 
@@ -160,7 +171,7 @@ class SessionActionsViewController: NSViewController {
 
         guard let viewModel = viewModel else { return }
 
-        slidesButton.isHidden = (viewModel.session.asset(of: .slides) == nil)
+        slidesButton.isHidden = (viewModel.session.asset(ofType: .slides) == nil)
         calendarButton.isHidden = (viewModel.sessionInstance.startTime < today())
 
         viewModel.rxIsFavorite.subscribe(onNext: { [weak self] isFavorite in
@@ -174,35 +185,46 @@ class SessionActionsViewController: NSViewController {
         }).disposed(by: disposeBag)
 
         if let rxDownloadState = DownloadManager.shared.downloadStatusObservable(for: viewModel.session) {
-            rxDownloadState.throttle(0.8, scheduler: MainScheduler.instance).subscribe(onNext: { [weak self] status in
+            rxDownloadState.throttle(.milliseconds(800), scheduler: MainScheduler.instance).subscribe(onNext: { [weak self] status in
                 switch status {
-                case .downloading(let progress):
+                case .downloading(let info):
                     self?.downloadIndicator.isHidden = false
                     self?.downloadButton.isHidden = true
+                    self?.clipButton.isHidden = true
 
-                    if progress < 0 {
+                    if info.progress < 0 {
                         self?.downloadIndicator.isIndeterminate = true
-                        self?.downloadIndicator.startAnimation(nil)
+                        self?.downloadIndicator.startAnimating()
                     } else {
                         self?.downloadIndicator.isIndeterminate = false
-                        self?.downloadIndicator.doubleValue = progress
+                        self?.downloadIndicator.progress = Float(info.progress)
                     }
-                case .paused, .cancelled, .none, .failed:
+
+                case .failed:
+                    let alert = WWDCAlert.create()
+                    alert.messageText = "Download Failed!"
+                    alert.informativeText = "An error occurred while attempting to download \"\(viewModel.title)\"."
+                    alert.runModal()
+                    fallthrough
+                case .paused, .cancelled, .none:
                     self?.resetDownloadButton()
                     self?.downloadIndicator.isHidden = true
                     self?.downloadButton.isHidden = false
+                    self?.clipButton.isHidden = true
                 case .finished:
                     self?.downloadButton.toolTip = "Delete downloaded video"
                     self?.downloadButton.isHidden = false
                     self?.downloadIndicator.isHidden = true
                     self?.downloadButton.image = #imageLiteral(resourceName: "trash")
                     self?.downloadButton.action = #selector(SessionActionsViewController.deleteDownload)
+                    self?.clipButton.isHidden = false
                 }
             }).disposed(by: disposeBag)
         } else {
             // session can't be downloaded (maybe Lab or download not available yet)
             downloadIndicator.isHidden = true
             downloadButton.isHidden = true
+            clipButton.isHidden = true
             resetDownloadButton()
         }
     }
@@ -224,7 +246,7 @@ class SessionActionsViewController: NSViewController {
     @IBAction func download(_ sender: NSView?) {
         downloadButton.isHidden = true
         downloadIndicator.isIndeterminate = true
-        downloadIndicator.startAnimation(nil)
+        downloadIndicator.startAnimating()
         downloadIndicator.isHidden = false
 
         delegate?.sessionActionsDidSelectDownload(sender)
@@ -240,6 +262,10 @@ class SessionActionsViewController: NSViewController {
 
     @IBAction func share(_ sender: NSView?) {
         delegate?.sessionActionsDidSelectShare(sender)
+    }
+
+    @IBAction func shareClip(_ sender: NSView?) {
+        delegate?.sessionActionsDidSelectShareClip(sender)
     }
 
     @IBAction func cancelDownload(_ sender: NSView?) {

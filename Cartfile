@@ -1,13 +1,11 @@
-github "SwiftyJSON/SwiftyJSON" ~> 4.0
+github "ReactiveX/RxSwift" ~> 5.0
 
-github "ReactiveX/RxSwift" ~> 4.0
+github "realm/realm-cocoa" ~> 5.4.0
+github "RxSwiftCommunity/RxRealm" ~> 3.0
 
-github "realm/realm-cocoa" ~> 3.7.3
-github "RxSwiftCommunity/RxRealm" ~> 0.7
+github "bustoutsolutions/siesta" ~> 1.5.1
 
-github "bustoutsolutions/siesta" ~> 1.0
-
-github "sparkle-project/Sparkle" ~> 1.17
+github "sparkle-project/Sparkle" ~> 1.23.0
 
 github "insidegui/ChromeCastCore" ~> 0.2.1
 github "insidegui/CloudKitCodable" ~> 0.1.3

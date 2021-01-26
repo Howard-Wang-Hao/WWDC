@@ -11,17 +11,24 @@ import Cocoa
 extension NSStackView {
 
     var computedContentSize: CGSize {
-        switch orientation {
-        case .horizontal:
+        func horizontal() -> CGSize {
             let height = arrangedSubviews.map({ $0.bounds.height }).max() ?? CGFloat(0)
             let width = arrangedSubviews.reduce(CGFloat(0), { $0 + $1.intrinsicContentSize.width + spacing })
 
             return CGSize(width: width - spacing, height: height)
+        }
+
+        switch orientation {
+        case .horizontal:
+            return horizontal()
         case .vertical:
             let width = arrangedSubviews.map({ $0.bounds.width }).max() ?? CGFloat(0)
             let height = arrangedSubviews.reduce(CGFloat(0), { $0 + $1.intrinsicContentSize.height + spacing })
 
             return CGSize(width: width, height: height - spacing)
+        @unknown default:
+            assertionFailure("An unexpected case was discovered on an non-frozen obj-c enum")
+            return horizontal()
         }
     }
 
@@ -113,10 +120,13 @@ final class TabItemView: NSView {
             s.width += 29
             return s
         }
+        // swiftlint:disable:next unused_setter_value
         set {
 
         }
     }
+
+    private var uiMaskNotificationTokens: [NSObjectProtocol] = []
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -128,6 +138,15 @@ final class TabItemView: NSView {
         stackView.centerYAnchor.constraint(equalTo: centerYAnchor).isActive = true
 
         titleLabel.centerYAnchor.constraint(equalTo: stackView.centerYAnchor, constant: -1).isActive = true
+
+        let showToken = NotificationCenter.default.addObserver(forName: .WWDCWindowWillShowUIMask, object: nil, queue: .main) { [weak self] _ in
+            self?.isEnabled = false
+        }
+        let hideToken = NotificationCenter.default.addObserver(forName: .WWDCWindowWillHideUIMask, object: nil, queue: .main) { [weak self] _ in
+            self?.isEnabled = true
+        }
+
+        uiMaskNotificationTokens = [showToken, hideToken]
     }
 
     required init?(coder: NSCoder) {
@@ -139,8 +158,16 @@ final class TabItemView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
+
         if let target = target, let action = action {
             NSApp.sendAction(action, to: target, from: self)
+        }
+    }
+
+    var isEnabled = true {
+        didSet {
+            animator().alphaValue = isEnabled ? 1 : 0.3
         }
     }
 

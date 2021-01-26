@@ -38,13 +38,11 @@ final class PUINowPlayingInfoCoordinator {
             MPNowPlayingInfoPropertyElapsedPlaybackTime: CMTimeGetSeconds(player.currentTime())
         ]
 
-        if #available(macOS 10.12.3, *), let urlAsset = item.asset as? AVURLAsset {
+        if let urlAsset = item.asset as? AVURLAsset {
             info[MPNowPlayingInfoPropertyAssetURL] = urlAsset.url
         }
 
-        if #available(macOS 10.13.1, *) {
-            info[MPNowPlayingInfoPropertyCurrentPlaybackDate] = item.currentDate()
-        }
+        info[MPNowPlayingInfoPropertyCurrentPlaybackDate] = item.currentDate()
 
         if let basicInfo = basicNowPlayingInfo?.dictionaryRepresentation {
             info.merge(basicInfo, uniquingKeysWith: { a, b in b })
@@ -72,7 +70,7 @@ final class PUINowPlayingInfoCoordinator {
             DispatchQueue.main.async { self?.updateNowPlayingInfo() }
         }
 
-        timeObserver = player.addPeriodicTimeObserver(forInterval: CMTimeMakeWithSeconds(1, 30000), queue: .main) { [weak self] _ in
+        timeObserver = player.addPeriodicTimeObserver(forInterval: CMTimeMakeWithSeconds(1, preferredTimescale: 30000), queue: .main) { [weak self] _ in
             DispatchQueue.main.async { self?.updateNowPlayingInfo() }
         }
     }

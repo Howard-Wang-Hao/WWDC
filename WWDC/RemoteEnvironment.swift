@@ -77,7 +77,7 @@ final class RemoteEnvironment {
     }
 
     private func doCreateSubscription() {
-        let options: CKQuerySubscriptionOptions = [.firesOnRecordCreation, .firesOnRecordUpdate, .firesOnRecordDeletion]
+        let options: CKQuerySubscription.Options = [.firesOnRecordCreation, .firesOnRecordUpdate, .firesOnRecordDeletion]
         let subscription = CKQuerySubscription(recordType: Constants.environmentRecordType,
                                                predicate: NSPredicate(value: true),
                                                subscriptionID: environmentSubscriptionID,
@@ -99,7 +99,7 @@ final class RemoteEnvironment {
         let notification = CKNotification(fromRemoteNotificationDictionary: userInfo)
 
         // check if the remote notification is for us, if not, tell the caller that we haven't handled it
-        guard notification.subscriptionID == environmentSubscriptionID else { return false }
+        guard notification?.subscriptionID == environmentSubscriptionID else { return false }
 
         // notification for environment change
         fetch()
@@ -115,7 +115,8 @@ extension Environment {
         guard let baseURLStr = record["baseURL"] as? String, URL(string: baseURLStr) != nil else { return nil }
 
         self.init(baseURL: baseURLStr,
-                  videosPath: "/videos.json",
+                  cocoaHubBaseURL: Self.defaultCocoaHubBaseURL,
+                  configPath: "/config.json",
                   sessionsPath: "/sessions.json",
                   newsPath: "/news.json",
                   liveVideosPath: "/videos_live.json",

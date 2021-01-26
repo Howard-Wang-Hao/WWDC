@@ -10,11 +10,10 @@ import Cocoa
 import PlayerUI
 
 enum MainWindowTab: Int {
-    #if FEATURED_TAB_ENABLED
     case featured
-    #endif
     case schedule
     case videos
+    case community
 
     func stringValue() -> String {
         var name = ""
@@ -31,7 +30,7 @@ extension Notification.Name {
 
 final class MainWindowController: WWDCWindowController {
 
-    weak var activePlayerView: PUIPlayerView? {
+    weak var touchBarProvider: NSResponder? {
         didSet {
             touchBar = nil
         }
@@ -51,8 +50,8 @@ final class MainWindowController: WWDCWindowController {
 
         window.center()
 
-        window.identifier = NSUserInterfaceItemIdentifier(rawValue: "main")
-        window.setFrameAutosaveName(NSWindow.FrameAutosaveName(rawValue: "main"))
+        window.identifier = .mainWindow
+        window.setFrameAutosaveName("main")
         window.minSize = NSSize(width: 1060, height: 700)
 
         self.window = window
@@ -63,7 +62,12 @@ final class MainWindowController: WWDCWindowController {
     }
 
     override func makeTouchBar() -> NSTouchBar? {
-        return activePlayerView?.makeTouchBar()
+        return touchBarProvider?.makeTouchBar()
     }
 
+}
+
+extension NSUserInterfaceItemIdentifier {
+
+    static let mainWindow = NSUserInterfaceItemIdentifier(rawValue: "main")
 }

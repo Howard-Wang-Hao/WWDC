@@ -8,7 +8,6 @@
 
 import Foundation
 import Siesta
-import SwiftyJSON
 
 // MARK: - Initialization and configuration
 
@@ -36,53 +35,43 @@ public final class AppleAPIClient {
         }
     }
 
-    private let jsonParser = ResponseContentTransformer { JSON($0.content as AnyObject) }
-
     private func configureService() {
         service.configure("**") { config in
-            config.pipeline[.parsing].add(self.jsonParser, contentTypes: ["*/json"])
+            // Parsing & Transformation is done using Codable, no need to let Siesta do the parsing
+            config.pipeline[.parsing].removeTransformers()
         }
 
-        service.configureTransformer(environment.newsPath) { [weak self] (entity: Entity<JSON>) throws -> [NewsItem]? in
-            guard let newsItemsJson = entity.content["items"].array else {
-                throw APIError.adapter
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .formatted(.confCoreFormatter)
+
+        service.configureTransformer(environment.newsPath) { (entity: Entity<Data>) throws -> [NewsItem]? in
+            struct NewsItemWrapper: Decodable {
+                let items: [NewsItem]
             }
 
-            return try self?.failableAdaptCollection(newsItemsJson, using: NewsItemsJSONAdapter())
+            let result = try decoder.decode(NewsItemWrapper.self, from: entity.content).items
+            return result
         }
 
-        service.configureTransformer(environment.featuredSectionsPath) { [weak self] (entity: Entity<JSON>) throws -> [FeaturedSection]? in
-            guard let sectionsJSON = entity.content["sections"].array else {
-                throw APIError.adapter
+        service.configureTransformer(environment.featuredSectionsPath) { (entity: Entity<Data>) throws -> [FeaturedSection]? in
+            struct FeaturedContentWrapper: Decodable {
+                let sections: [FeaturedSection]
             }
 
-            return try self?.failableAdaptCollection(sectionsJSON, using: FeaturedSectionsJSONAdapter())
+            let result = try decoder.decode(FeaturedContentWrapper.self, from: entity.content).sections
+            return result
         }
 
-        service.configureTransformer(environment.sessionsPath) { [weak self] (entity: Entity<JSON>) throws -> ContentsResponse? in
-            return try self?.failableAdapt(entity.content, using: ContentsResponseAdapter())
+        service.configureTransformer(environment.configPath) { (entity: Entity<Data>) throws -> ConfigResponse? in
+            return try decoder.decode(ConfigResponse.self, from: entity.content)
         }
 
-        service.configureTransformer(environment.videosPath) { [weak self] (entity: Entity<JSON>) throws -> SessionsResponse? in
-            return try self?.failableAdapt(entity.content, using: SessionsResponseAdapter())
+        service.configureTransformer(environment.sessionsPath) { (entity: Entity<Data>) throws -> ContentsResponse? in
+            return try decoder.decode(ContentsResponse.self, from: entity.content)
         }
 
-        service.configureTransformer(environment.liveVideosPath) { [weak self] (entity: Entity<JSON>) throws -> [SessionAsset]? in
-            guard let sessionsDict = entity.content["live_sessions"].dictionary else {
-                throw APIError.adapter
-            }
-
-            let sessionsArray = sessionsDict.compactMap { key, value -> JSON? in
-                guard let id = JSON.init(rawValue: key) else { return nil }
-
-                var v = value
-
-                v["sessionId"] = id
-
-                return v
-            }
-
-            return try self?.failableAdaptCollection(sessionsArray, using: LiveVideosAdapter())
+        service.configureTransformer(environment.liveVideosPath) { (entity: Entity<Data>) throws -> [SessionAsset]? in
+            return try decoder.decode(LiveVideosWrapper.self, from: entity.content).liveAssets
         }
     }
 
@@ -92,12 +81,12 @@ public final class AppleAPIClient {
         currentSessionsRequest?.cancel()
         currentNewsItemsRequest?.cancel()
         currentFeaturedSectionsRequest?.cancel()
+        currentConfigRequest?.cancel()
 
         environment = Environment.current
 
         service = Service(baseURL: environment.baseURL)
         liveVideoAssets = makeLiveVideosResource()
-        sessions = makeSessionsResource()
         schedule = makeScheduleResource()
         news = makeNewsResource()
         featuredSections = makeFeaturedSectionsResource()
@@ -107,20 +96,16 @@ public final class AppleAPIClient {
 
     fileprivate lazy var liveVideoAssets: Resource = self.makeLiveVideosResource()
 
-    fileprivate lazy var sessions: Resource = self.makeSessionsResource()
-
     fileprivate lazy var schedule: Resource = self.makeScheduleResource()
 
     fileprivate lazy var news: Resource = self.makeNewsResource()
 
     fileprivate lazy var featuredSections: Resource = self.makeFeaturedSectionsResource()
 
+    fileprivate lazy var config: Resource = self.makeConfigResource()
+
     fileprivate func makeLiveVideosResource() -> Resource {
         return service.resource(environment.liveVideosPath)
-    }
-
-    fileprivate func makeSessionsResource() -> Resource {
-        return service.resource(environment.videosPath)
     }
 
     fileprivate func makeScheduleResource() -> Resource {
@@ -135,6 +120,10 @@ public final class AppleAPIClient {
         return service.resource(environment.featuredSectionsPath)
     }
 
+    fileprivate func makeConfigResource() -> Resource {
+        return service.resource(environment.configPath)
+    }
+
     // MARK: - Standard API requests
 
     private var liveVideoAssetsResource: Resource!
@@ -142,17 +131,19 @@ public final class AppleAPIClient {
     private var sessionsResource: Resource!
     private var newsItemsResource: Resource!
     private var featuredSectionsResource: Resource!
+    private var configResource: Resource!
 
     private var currentLiveVideosRequest: Request?
     private var currentScheduleRequest: Request?
     private var currentSessionsRequest: Request?
     private var currentNewsItemsRequest: Request?
     private var currentFeaturedSectionsRequest: Request?
+    private var currentConfigRequest: Request?
 
     public func fetchLiveVideoAssets(completion: @escaping (Result<[SessionAsset], APIError>) -> Void) {
         if liveVideoAssetsResource == nil {
-            liveVideoAssetsResource = liveVideoAssets.addObserver(owner: self) { [weak self] resource, event in
-                self?.process(resource, event: event, with: completion)
+            liveVideoAssetsResource = liveVideoAssets.addObserver(owner: self) { resource, event in
+                Resource.process(resource, event: event, with: completion)
             }
         }
 
@@ -162,8 +153,8 @@ public final class AppleAPIClient {
 
     public func fetchContent(completion: @escaping (Result<ContentsResponse, APIError>) -> Void) {
         if contentsResource == nil {
-            contentsResource = schedule.addObserver(owner: self) { [weak self] resource, event in
-                self?.process(resource, event: event, with: completion)
+            contentsResource = schedule.addObserver(owner: self) { resource, event in
+                Resource.process(resource, event: event, with: completion)
             }
         }
 
@@ -173,8 +164,8 @@ public final class AppleAPIClient {
 
     public func fetchNewsItems(completion: @escaping (Result<[NewsItem], APIError>) -> Void) {
         if newsItemsResource == nil {
-            newsItemsResource = news.addObserver(owner: self) { [weak self] resource, event in
-                self?.process(resource, event: event, with: completion)
+            newsItemsResource = news.addObserver(owner: self) { resource, event in
+                Resource.process(resource, event: event, with: completion)
             }
         }
 
@@ -184,8 +175,8 @@ public final class AppleAPIClient {
 
     public func fetchFeaturedSections(completion: @escaping (Result<[FeaturedSection], APIError>) -> Void) {
         if featuredSectionsResource == nil {
-            featuredSectionsResource = featuredSections.addObserver(owner: self) { [weak self] resource, event in
-                self?.process(resource, event: event, with: completion)
+            featuredSectionsResource = featuredSections.addObserver(owner: self) { resource, event in
+                Resource.process(resource, event: event, with: completion)
             }
         }
 
@@ -193,45 +184,32 @@ public final class AppleAPIClient {
         currentFeaturedSectionsRequest = featuredSectionsResource.loadIfNeeded()
     }
 
+    public func fetchConfig(completion: @escaping (Result<ConfigResponse, APIError>) -> Void) {
+        if configResource == nil {
+            configResource = config.addObserver(owner: self) { resource, event in
+                Resource.process(resource, event: event, with: completion)
+            }
+        }
+
+        currentConfigRequest?.cancel()
+        currentConfigRequest = configResource.loadIfNeeded()
+    }
+
 }
 
 // MARK: - API results processing
 
-extension AppleAPIClient {
+extension Resource {
 
-    /// Convenience method to use a model adapter as a method that returns the model(s) or throws an error
-    fileprivate func failableAdapt<A: Adapter, T>(_ input: JSON, using adapter: A) throws -> T where A.InputType == JSON, A.OutputType == T {
-        let result = adapter.adapt(input)
-
-        switch result {
-        case let .error(error):
-            throw error
-        case let .success(output):
-            return output
-        }
-    }
-
-    /// Convenience method to use a model adapter as a method that returns the model(s) or throws an error
-    fileprivate func failableAdaptCollection<A: Adapter, T>(_ input: [JSON], using adapter: A) throws -> [T] where A.InputType == JSON, A.OutputType == T {
-        let result = adapter.adapt(input)
-
-        switch result {
-        case let .error(error):
-            throw error
-        case let .success(output):
-            return output
-        }
-    }
-
-    fileprivate func process<M>(_ resource: Resource, event: ResourceEvent, with completion: @escaping (Result<M, APIError>) -> Void) {
+    static func process<M>(_ resource: Resource, event: ResourceEvent, with completion: @escaping (Result<M, APIError>) -> Void) {
         switch event {
         case .error:
-            completion(.error(resource.error))
+            completion(.failure(resource.error))
         case .newData:
             if let results: M = resource.typedContent() {
                 completion(.success(results))
             } else {
-                completion(.error(.adapter))
+                completion(.failure(.adapter))
             }
         default: break
         }

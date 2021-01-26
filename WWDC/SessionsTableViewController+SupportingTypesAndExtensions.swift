@@ -20,7 +20,7 @@ protocol SessionIdentifiable {
     var sessionIdentifier: String { get }
 }
 
-struct SessionIdentifier: SessionIdentifiable {
+struct SessionIdentifier: SessionIdentifiable, Hashable {
     let sessionIdentifier: String
 
     init(_ string: String) {
@@ -59,7 +59,7 @@ extension Session {
 extension Array where Element == SessionRow {
 
     func index(of session: SessionIdentifiable) -> Int? {
-        return index { row in
+        return firstIndex { row in
             guard case .session(let viewModel) = row.kind else { return false }
 
             return viewModel.identifier == session.sessionIdentifier
@@ -67,7 +67,7 @@ extension Array where Element == SessionRow {
     }
 
     func firstSessionRowIndex() -> Int? {
-        return index { row in
+        return firstIndex { row in
             if case .session = row.kind {
                 return true
             }
@@ -106,10 +106,9 @@ final class FilterResults {
         self.storage = storage
         self.query = query
 
-        if let appDelegate = NSApplication.shared.delegate as? AppDelegate {
+        if let coordinator = (NSApplication.shared.delegate as? AppDelegate)?.coordinator {
 
-            appDelegate
-                .coordinator
+            coordinator
                 .rxPlayerOwnerSessionIdentifier
                 .subscribe(onNext: { [weak self] _ in
                     self?.bindResults()
@@ -153,16 +152,15 @@ final class FilterResults {
                    log: .default,
                    type: .error,
                    String(describing: error))
-            LoggingHelper.registerError(error, info: ["when": "Searching"])
         }
     }
 }
 
 fileprivate extension NSPredicate {
 
-    fileprivate func orCurrentlyPlayingSession() -> NSPredicate {
+    func orCurrentlyPlayingSession() -> NSPredicate {
 
-        guard let playingSession = (NSApplication.shared.delegate as? AppDelegate)?.coordinator.playerOwnerSessionIdentifier else {
+        guard let playingSession = (NSApplication.shared.delegate as? AppDelegate)?.coordinator?.playerOwnerSessionIdentifier else {
             return self
         }
 
@@ -170,7 +168,7 @@ fileprivate extension NSPredicate {
     }
 }
 
-public extension ObservableType where E: NotificationEmitter {
+public extension ObservableType where Element: NotificationEmitter {
 
     /**
      Returns an `Observable<E>` that emits each time elements are added or removed from the collection.
@@ -183,17 +181,17 @@ public extension ObservableType where E: NotificationEmitter {
 
      - returns: `Observable<E>`, e.g. when called on `Results<Model>` it will return `Observable<Results<Model>>`, on a `List<User>` it will return `Observable<List<User>>`, etc.
      */
-    public static func shallowCollection(from collection: E, synchronousStart: Bool = true)
-        -> Observable<E> {
+    static func shallowCollection(from collection: Element, synchronousStart: Bool = true)
+        -> Observable<Element> {
 
             return Observable.create { observer in
                 if synchronousStart {
                     observer.onNext(collection)
                 }
 
-                let token = collection.observe { changeset in
+                let token = collection.observe(on: nil) { changeset in
 
-                    var value: E? = nil
+                    var value: Element?
 
                     switch changeset {
                     case .initial(let latestValue):

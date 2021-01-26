@@ -21,7 +21,7 @@ class WWDCTabViewController<Tab: RawRepresentable>: NSTabViewController where Ta
         }
     }
 
-    private var activeTabVar = Variable<Tab>(Tab(rawValue: 0)!)
+    private var activeTabVar = BehaviorRelay<Tab>(value: Tab(rawValue: 0)!)
 
     var rxActiveTab: Observable<Tab> {
         return activeTabVar.asObservable()
@@ -43,7 +43,7 @@ class WWDCTabViewController<Tab: RawRepresentable>: NSTabViewController where Ta
                 }
             }
 
-            activeTabVar.value = Tab(rawValue: selectedTabViewItemIndex)!
+            activeTabVar.accept(Tab(rawValue: selectedTabViewItemIndex)!)
         }
     }
 
@@ -75,14 +75,14 @@ class WWDCTabViewController<Tab: RawRepresentable>: NSTabViewController where Ta
 
         itemView.title = tabViewItem.label
         itemView.controllerIdentifier = (tabViewItem.viewController?.identifier).map { $0.rawValue } ?? ""
-        itemView.image = NSImage(named: NSImage.Name(rawValue: itemView.controllerIdentifier.lowercased()))
-        itemView.alternateImage = NSImage(named: NSImage.Name(rawValue: itemView.controllerIdentifier.lowercased() + "-filled"))
+        itemView.image = NSImage(named: itemView.controllerIdentifier.lowercased())
+        itemView.alternateImage = NSImage(named: itemView.controllerIdentifier.lowercased() + "-filled")
         itemView.sizeToFit()
 
         itemView.target = self
         itemView.action = #selector(changeTab)
 
-        itemView.state = (tabViewItems.index(of: tabViewItem) == selectedTabViewItemIndex) ? .on : .off
+        itemView.state = (tabViewItems.firstIndex(of: tabViewItem) == selectedTabViewItemIndex) ? .on : .off
 
         tabBar.addItem(itemView)
     }
@@ -127,7 +127,7 @@ class WWDCTabViewController<Tab: RawRepresentable>: NSTabViewController where Ta
     }
 
     private func indexForChild(with identifier: String) -> Int? {
-        return tabViewItems.index { $0.viewController?.identifier?.rawValue == identifier }
+        return tabViewItems.firstIndex { $0.viewController?.identifier?.rawValue == identifier }
     }
 
     private var loadingView: ModalLoadingView?

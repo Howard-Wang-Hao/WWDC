@@ -26,9 +26,11 @@ class WWDCImageView: NSView {
 
     weak var delegate: WWDCImageViewDelegate?
 
-    var isRounded = false {
+    var cornerRadius: CGFloat = 4 {
         didSet {
-            updateRoundness()
+            guard cornerRadius != oldValue else { return }
+
+            updateCorners()
         }
     }
 
@@ -38,9 +40,7 @@ class WWDCImageView: NSView {
         }
     }
 
-    override var isOpaque: Bool {
-        return drawsBackground && !isRounded
-    }
+    override var isOpaque: Bool { drawsBackground && cornerRadius.isZero }
 
     var backgroundColor: NSColor = .clear {
         didSet {
@@ -82,10 +82,10 @@ class WWDCImageView: NSView {
         return l
     }()
 
-    private lazy var imageLayer: WWDCLayer = {
+    private(set) lazy var imageLayer: WWDCLayer = {
         let l = WWDCLayer()
 
-        l.contentsGravity = kCAGravityResizeAspect
+        l.contentsGravity = .resizeAspect
         l.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
         l.zPosition = 1
 
@@ -94,20 +94,16 @@ class WWDCImageView: NSView {
 
     private func buildUI() {
         wantsLayer = true
-        layer?.cornerRadius = 2
         layer?.masksToBounds = true
+        layer?.cornerCurve = .continuous
 
         backgroundLayer.frame = bounds
         imageLayer.frame = bounds
 
         layer?.addSublayer(backgroundLayer)
         layer?.addSublayer(imageLayer)
-    }
 
-    override func layout() {
-        super.layout()
-
-        updateRoundness()
+        updateCorners()
     }
 
     override func makeBackingLayer() -> CALayer {
@@ -121,7 +117,7 @@ class WWDCImageView: NSView {
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        guard let file = (sender.draggingPasteboard().propertyList(forType: NSFilenamesPboardType) as? [String])?.first else { return false }
+        guard let file = (sender.draggingPasteboard.propertyList(forType: NSFilenamesPboardType) as? [String])?.first else { return false }
 
         let fileURL = URL(fileURLWithPath: file)
 
@@ -135,10 +131,8 @@ class WWDCImageView: NSView {
         return true
     }
 
-    private func updateRoundness() {
-        guard let layer = layer else { return }
-
-        layer.cornerRadius = isRounded ? layer.bounds.height / 2 : 0
+    private func updateCorners() {
+        layer?.cornerRadius = cornerRadius
     }
 
 }

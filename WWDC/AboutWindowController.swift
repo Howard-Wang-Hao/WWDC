@@ -29,7 +29,7 @@ final class AboutWindowController: NSWindowController {
     }
 
     convenience init(infoText: String?) {
-        self.init(windowNibName: NSNib.Name(rawValue: "AboutWindowController"))
+        self.init(windowNibName: "AboutWindowController")
         self.infoText = infoText
     }
 
@@ -49,8 +49,6 @@ final class AboutWindowController: NSWindowController {
         window?.isMovableByWindowBackground = true
         window?.titlebarAppearsTransparent = true
         window?.titleVisibility = .hidden
-
-        window?.appearance = WWDCAppearance.appearance()
 
         guard let info = Bundle.main.infoDictionary else { return }
 
@@ -145,7 +143,7 @@ final class AboutWindowController: NSWindowController {
 
 fileprivate extension Dictionary where Key == String, Value == Any {
 
-    fileprivate func stringOrEmpty(for key: String) -> String {
+    func stringOrEmpty(for key: String) -> String {
 
         return (self[key] as? String) ?? ""
     }

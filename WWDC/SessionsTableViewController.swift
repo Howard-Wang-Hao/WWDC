@@ -15,13 +15,13 @@ import os.log
 
 // MARK: - Sessions Table View Controller
 
-class SessionsTableViewController: NSViewController {
+class SessionsTableViewController: NSViewController, NSMenuItemValidation {
 
     private let disposeBag = DisposeBag()
 
     weak var delegate: SessionsTableViewControllerDelegate?
 
-    var selectedSession = Variable<SessionViewModel?>(nil)
+    var selectedSession = BehaviorRelay<SessionViewModel?>(value: nil)
 
     let style: SessionsListStyle
 
@@ -46,7 +46,7 @@ class SessionsTableViewController: NSViewController {
         scrollView.frame = view.bounds
         tableView.frame = view.bounds
 
-        scrollView.widthAnchor.constraint(greaterThanOrEqualToConstant: 300).isActive = true
+        scrollView.widthAnchor.constraint(greaterThanOrEqualToConstant: 320).isActive = true
 
         view.addSubview(scrollView)
         view.addSubview(searchController.view)
@@ -94,7 +94,7 @@ class SessionsTableViewController: NSViewController {
 
     private func selectSessionImmediately(with identifier: SessionIdentifiable) {
 
-        guard let index = displayedRows.index(where: { row in
+        guard let index = displayedRows.firstIndex(where: { row in
             row.represents(session: identifier)
         }) else {
             return
@@ -143,35 +143,14 @@ class SessionsTableViewController: NSViewController {
     private func updateWith(searchResults: Results<Session>?, animated: Bool, selecting session: SessionIdentifiable?) {
         guard hasPerformedFirstUpdate else { return }
 
-        let showWeekday = !(searchResults?.isEmpty ?? true)
-        allRows.forEachSessionViewModel {
-            $0.showsWeekdayInContext = showWeekday
-        }
-
         guard let results = searchResults else {
-
-            if !allRows.isEmpty {
-                setDisplayedRows(allRows, animated: animated, overridingSelectionWith: session)
-            }
-
+            setDisplayedRows(sessionRowProvider?.allRows ?? [], animated: animated, overridingSelectionWith: session)
             return
         }
 
         guard let sessionRowProvider = sessionRowProvider else { return }
 
-        let sortingFunction = sessionRowProvider.sessionSortingFunction
-
-        let sessionRows: [SessionRow] = results.sorted(by: sortingFunction).compactMap { session in
-            guard let viewModel = SessionViewModel(session: session) else { return nil }
-
-            for row in allRows {
-                if row.represents(session: SessionIdentifier(session.identifier)) {
-                    return row
-                }
-            }
-
-            return SessionRow(viewModel: viewModel)
-        }
+        let sessionRows = sessionRowProvider.filteredRows(onlyIncludingRowsFor: results)
 
         setDisplayedRows(sessionRows, animated: animated, overridingSelectionWith: session)
     }
@@ -180,12 +159,9 @@ class SessionsTableViewController: NSViewController {
 
     var sessionRowProvider: SessionRowProvider? {
         didSet {
-            allRows = sessionRowProvider?.sessionRows() ?? []
             performFirstUpdateIfNeeded()
         }
     }
-
-    private var allRows: [SessionRow] = []
 
     private(set) var displayedRows: [SessionRow] = []
 
@@ -202,12 +178,13 @@ class SessionsTableViewController: NSViewController {
 
         displayedRows = rows
 
+        // Clear filters if there is an initial selection that we can display that isn't gonna be visible
         if let initialSelection = self.initialSelection,
             !isSessionVisible(for: initialSelection) && canDisplay(session: initialSelection) {
 
             searchController.resetFilters()
             _filterResults = .empty
-            displayedRows = allRows
+            displayedRows = sessionRowProvider?.allRows ?? []
         }
 
         tableView.reloadData()
@@ -284,12 +261,29 @@ class SessionsTableViewController: NSViewController {
                     selectedIndexes.insert(overrideIndex)
                 } else {
                     // Preserve selected rows if possible
-                    let selectedRows = self.tableView.selectedRowIndexes.compactMap { (index) -> IndexedSessionRow? in
+                    let previouslySelectedRows = self.tableView.selectedRowIndexes.compactMap { (index) -> IndexedSessionRow? in
                         guard index < oldValue.endIndex else { return nil }
                         return IndexedSessionRow(sessionRow: oldValue[index], index: index)
                     }
 
-                    selectedIndexes = IndexSet(newRowsSet.intersection(selectedRows).map { $0.index })
+                    let newSelection = newRowsSet.intersection(previouslySelectedRows)
+                    if let topOfPreviousSelection = previouslySelectedRows.first, newSelection.isEmpty {
+                        // The update has removed the selected row(s).
+                        // e.g. You have the unwatched filter active and then mark the selection as watched
+                        stride(from: topOfPreviousSelection.index, to: -1, by: -1).lazy.compactMap {
+                            return IndexedSessionRow(sessionRow: oldValue[$0], index: $0)
+                        }.first { (indexedRow: IndexedSessionRow) -> Bool in
+                            newRowsSet.contains(indexedRow)
+                        }.flatMap {
+                            newRowsSet.firstIndex(of: $0)
+                        }.map {
+                            newRowsSet[$0].index
+                        }.map {
+                            selectedIndexes = IndexSet(integer: $0)
+                        }
+                    } else {
+                        selectedIndexes = IndexSet(newSelection.map { $0.index })
+                    }
                 }
 
                 if selectedIndexes.isEmpty, let defaultIndex = newValue.firstSessionRowIndex() {
@@ -337,9 +331,9 @@ class SessionsTableViewController: NSViewController {
     }
 
     func canDisplay(session: SessionIdentifiable) -> Bool {
-        return allRows.contains { row -> Bool in
+        return sessionRowProvider?.allRows.contains { row -> Bool in
             row.represents(session: session)
-        }
+        } ?? false
     }
 
     // MARK: - Search
@@ -386,7 +380,6 @@ class SessionsTableViewController: NSViewController {
         v.floatsGroupRows = true
         v.gridStyleMask = .solidHorizontalGridLineMask
         v.gridColor = .darkGridColor
-        v.selectionHighlightStyle = .none // see WWDCTableRowView
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(rawValue: "session"))
         v.addTableColumn(column)
@@ -499,7 +492,7 @@ class SessionsTableViewController: NSViewController {
         }
     }
 
-    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         for row in selectedAndClickedRowIndexes() {
             let sessionRow = displayedRows[row]
 
@@ -517,7 +510,7 @@ class SessionsTableViewController: NSViewController {
         case .watched:
             let canMarkAsWatched = !viewModel.session.isWatched
                 && viewModel.session.instances.first?.isCurrentlyLive != true
-                && viewModel.session.asset(of: .streamingVideo) != nil
+                && viewModel.session.asset(ofType: .streamingVideo) != nil
 
             return canMarkAsWatched
         case .unwatched:
@@ -529,15 +522,15 @@ class SessionsTableViewController: NSViewController {
         default: ()
         }
 
-        let remoteURL = viewModel.session.assets.filter("rawAssetType == %@", SessionAssetType.hdVideo.rawValue).first?.remoteURL
-
-        switch (menuItem.option, remoteURL) {
-        case let (.download, remoteURL?):
-            return !DownloadManager.shared.isDownloading(remoteURL) && DownloadManager.shared.localFileURL(for: viewModel.session) == nil
-        case let (.cancelDownload, remoteURL?):
-            return DownloadManager.shared.isDownloading(remoteURL)
-        case let (.revealInFinder, remoteURL?):
-            return DownloadManager.shared.hasVideo(remoteURL)
+        switch menuItem.option {
+        case .download:
+            return DownloadManager.shared.isDownloadable(viewModel.session) &&
+                !DownloadManager.shared.isDownloading(viewModel.session) &&
+                !DownloadManager.shared.hasDownloadedVideo(session: viewModel.session)
+        case .cancelDownload:
+            return DownloadManager.shared.isDownloadable(viewModel.session) && DownloadManager.shared.isDownloading(viewModel.session)
+        case .revealInFinder:
+            return DownloadManager.shared.hasDownloadedVideo(session: viewModel.session)
         default: ()
         }
 

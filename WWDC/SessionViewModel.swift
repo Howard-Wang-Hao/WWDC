@@ -25,19 +25,18 @@ final class SessionViewModel {
     var imageUrl: URL?
     let trackName: String
 
-    // These properties are temporary. They are for supporting conditionally
-    // showing the weekday while filters are active on the schedule view
-    private var showsShortDayInContextSubject = BehaviorSubject(value: false)
-    var showsWeekdayInContext = false {
-        didSet {
-            showsShortDayInContextSubject.onNext(showsWeekdayInContext)
-        }
-    }
-
     private var disposeBag = DisposeBag()
 
     lazy var rxSession: Observable<Session> = {
         return Observable.from(object: session)
+    }()
+
+    lazy var rxTranscriptAnnotations: Observable<List<TranscriptAnnotation>> = {
+        guard let annotations = session.transcript()?.annotations else {
+            return Observable.just(List<TranscriptAnnotation>())
+        }
+
+        return Observable.collection(from: annotations)
     }()
 
     lazy var rxSessionInstance: Observable<SessionInstance> = {
@@ -76,13 +75,11 @@ final class SessionViewModel {
     lazy var rxContext: Observable<String> = {
         if self.style == .schedule {
 
-            return Observable.combineLatest(rxSession, rxSessionInstance, showsShortDayInContextSubject).map {
-                SessionViewModel.context(for: $0.0, instance: $0.1, showingWeekday: $0.2)
+            return Observable.combineLatest(rxSession, rxSessionInstance).map {
+                SessionViewModel.context(for: $0.0, instance: $0.1)
             }
         } else {
-            return rxSession.map { [weak self] in
-                SessionViewModel.context(for: $0, showingWeekday: self?.showsWeekdayInContext == true)
-            }
+            return rxSession.map { SessionViewModel.context(for: $0) }
         }
     }()
 
@@ -135,7 +132,7 @@ final class SessionViewModel {
     }()
 
     lazy var rxPlayableContent: Observable<Results<SessionAsset>> = {
-        let playableAssets = self.session.assets.filter("rawAssetType == %@ OR rawAssetType == %@", SessionAssetType.streamingVideo.rawValue, SessionAssetType.liveStreamVideo.rawValue)
+        let playableAssets = self.session.assets(matching: [.streamingVideo, .liveStreamVideo])
 
         return Observable.collection(from: playableAssets)
     }()
@@ -148,7 +145,7 @@ final class SessionViewModel {
     }()
 
     lazy var rxDownloadableContent: Observable<Results<SessionAsset>> = {
-        let downloadableAssets = self.session.assets.filter("(rawAssetType == %@ AND remoteURL != '')", SessionAssetType.hdVideo.rawValue)
+        let downloadableAssets = self.session.assets.filter("(rawAssetType == %@ AND remoteURL != '')", DownloadManager.downloadQuality.rawValue)
 
         return Observable.collection(from: downloadableAssets)
     }()
@@ -160,8 +157,9 @@ final class SessionViewModel {
     }()
 
     lazy var rxRelatedSessions: Observable<Results<RelatedResource>> = {
-        let predicateFormat = "type == %@ AND (ANY session.instances.sessionType == %d OR ANY session.instances.startTime >= %@)"
-        let relatedPredicate = NSPredicate(format: predicateFormat, RelatedResourceType.session.rawValue, SessionInstanceType.session.rawValue, today() as NSDate)
+        // Return sessions with videos, or any session that hasn't yet occurred
+        let predicateFormat = "type == %@ AND (ANY session.assets.rawAssetType == %@ OR ANY session.instances.startTime >= %@)"
+        let relatedPredicate = NSPredicate(format: predicateFormat, RelatedResourceType.session.rawValue, SessionAssetType.streamingVideo.rawValue, today() as NSDate)
         let validRelatedSessions = self.session.related.filter(relatedPredicate)
 
         return Observable.collection(from: validRelatedSessions)
@@ -184,7 +182,7 @@ final class SessionViewModel {
         identifier = session.identifier
         imageUrl = SessionViewModel.imageUrl(for: session)
 
-        if let webUrlStr = session.asset(of: .webpage)?.remoteURL {
+        if let webUrlStr = session.asset(ofType: .webpage)?.remoteURL {
             webUrl = URL(string: webUrlStr)
         }
     }
@@ -193,13 +191,17 @@ final class SessionViewModel {
         guard let event = event else { return "" }
 
         let year = Calendar.current.component(.year, from: event.startDate)
+        var name = event.name
 
-        // Currently, there's only one event which is not a WWDC (the "Fall 2017" event),
-        // for some reason it includes the year on its name, while WWDC editions do not,
-        // so we have to use this workaround to avoid displaying the year twice
-        let name = event.name.replacingOccurrences(of: " \(year)", with: "")
+        /*
+        We want to make sure that WWDC events show the year
+        So we add it it not present.
+        */
+        if name == "WWDC" {
+            name.append(" \(year)")
+        }
 
-        return "\(name) \(year) · Session \(session.number)"
+        return "\(name) · Session \(session.number)"
     }
 
     static func focusesDescription(from focuses: [Focus], collapse: Bool) -> String {
@@ -217,10 +219,9 @@ final class SessionViewModel {
         return result
     }
 
-    static func context(for session: Session, instance: SessionInstance? = nil, showingWeekday: Bool) -> String {
+    static func context(for session: Session, instance: SessionInstance? = nil) -> String {
         if let instance = instance {
-            var result = showingWeekday ? shortDayOfTheWeekFormatter.string(from: instance.startTime) + " · " : ""
-            result += timeFormatter.string(from: instance.startTime) + " - " + timeFormatter.string(from: instance.endTime)
+            var result = timeFormatter.string(from: instance.startTime) + " - " + timeFormatter.string(from: instance.endTime)
 
             result += " · " + instance.roomName
 
@@ -271,7 +272,7 @@ final class SessionViewModel {
             }
         }
 
-        let imageAsset = session.asset(of: .image)
+        let imageAsset = session.asset(ofType: .image)
 
         guard let thumbnail = imageAsset?.remoteURL, let thumbnailUrl = URL(string: thumbnail) else { return nil }
 
@@ -279,7 +280,7 @@ final class SessionViewModel {
     }
 
     static func webUrl(for session: Session) -> URL? {
-        guard let url = session.asset(of: .webpage)?.remoteURL else { return nil }
+        guard let url = session.asset(ofType: .webpage)?.remoteURL else { return nil }
 
         return URL(string: url)
     }

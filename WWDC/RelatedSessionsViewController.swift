@@ -61,7 +61,7 @@ final class RelatedSessionsViewController: NSViewController {
         l.maximumNumberOfLines = 1
         l.translatesAutoresizingMaskIntoConstraints = false
         l.textColor = .secondaryText
-        l.font = .systemFont(ofSize: 20, weight: .semibold)
+        l.font = .wwdcRoundedSystemFont(ofSize: 20, weight: .semibold)
 
         return l
     }()
@@ -79,6 +79,8 @@ final class RelatedSessionsViewController: NSViewController {
         _ = NotificationCenter.default.addObserver(forName: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil, queue: nil) { [weak v] _ in
             v?.scrollerStyle = .overlay
         }
+
+        v.backgroundColor = .darkWindowBackground
 
         return v
     }()
@@ -98,6 +100,8 @@ final class RelatedSessionsViewController: NSViewController {
         v.dataSource = self
         v.delegate = self
         v.autoresizingMask = [.width, .minYMargin]
+
+        v.backgroundColors = [.darkWindowBackground]
 
         return v
     }()

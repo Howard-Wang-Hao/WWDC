@@ -9,9 +9,13 @@
 import Cocoa
 import RxSwift
 import RxCocoa
+import CoreMedia
 
 protocol ShelfViewControllerDelegate: class {
     func shelfViewControllerDidSelectPlay(_ controller: ShelfViewController)
+    func shelfViewController(_ controller: ShelfViewController, didBeginClipSharingWithHost hostView: NSView)
+    func suggestedBeginTimeForClipSharingInShelfViewController(_ controller: ShelfViewController) -> CMTime?
+    func shelfViewControllerDidEndClipSharing(_ controller: ShelfViewController)
 }
 
 class ShelfViewController: NSViewController {
@@ -110,10 +114,8 @@ class ShelfViewController: NSViewController {
                 return
             }
 
-            self?.currentImageDownloadOperation = ImageDownloadCenter.shared.downloadImage(from: imageUrl, thumbnailHeight: Constants.thumbnailHeight) { url, original, _ in
-                guard url == imageUrl else { return }
-
-                self?.shelfView.image = original
+            self?.currentImageDownloadOperation = ImageDownloadCenter.shared.downloadImage(from: imageUrl, thumbnailHeight: Constants.thumbnailHeight) { url, result in
+                self?.shelfView.image = result.original
             }
         }).disposed(by: disposeBag)
     }
@@ -121,6 +123,39 @@ class ShelfViewController: NSViewController {
     @objc private func play(_ sender: Any?) {
 
         self.delegate?.shelfViewControllerDidSelectPlay(self)
+    }
+
+    private var sharingController: ClipSharingViewController?
+
+    func showClipUI() {
+        guard let session = viewModel?.session else { return }
+        guard let url = DownloadManager.shared.downloadedFileURL(for: session) else { return }
+
+        let subtitle = session.event.first?.name ?? "Apple Developer"
+
+        let suggestedTime = delegate?.suggestedBeginTimeForClipSharingInShelfViewController(self)
+
+        let controller = ClipSharingViewController(
+            with: url,
+            initialBeginTime: suggestedTime,
+            title: session.title,
+            subtitle: subtitle
+        )
+
+        addChild(controller)
+        controller.view.autoresizingMask = [.width, .height]
+        controller.view.frame = playerContainer.bounds
+        playerContainer.addSubview(controller.view)
+
+        sharingController = controller
+
+        delegate?.shelfViewController(self, didBeginClipSharingWithHost: controller.playerView)
+
+        controller.completionHandler = { [weak self] in
+            guard let self = self else { return }
+
+            self.delegate?.shelfViewControllerDidEndClipSharing(self)
+        }
     }
 
 }

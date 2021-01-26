@@ -10,7 +10,7 @@ import Foundation
 
 struct Constants {
 
-    static let coreSchemaVersion: UInt64 = 44
+    static let coreSchemaVersion: UInt64 = 55
 
     static let thumbnailHeight: CGFloat = 150
 
@@ -27,5 +27,8 @@ struct Constants {
 
     /// How many MINUTES to subtract from the start time of a live session to consider it live
     static let liveSessionStartTimeTolerance: Int = 3
+
+    /// How many MINUTES to add to the end time of a live session to consider it not live anymore
+    static let liveSessionEndTimeTolerance: Int = 30
 
 }
